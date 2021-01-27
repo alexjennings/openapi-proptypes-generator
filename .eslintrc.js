@@ -16,7 +16,7 @@ module.exports = {
 	rules: {
 		indent: [
 			2,
-			'tab',
+			'space',
 			{
 				'SwitchCase': 1,
 				'VariableDeclarator': 1
