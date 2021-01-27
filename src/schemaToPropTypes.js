@@ -1,8 +1,16 @@
 let indentLevel = 1;
-const ESLINT_OVERWRITES = `/* eslint no-use-before-define: 0 */\n`;
-const FILE_IMPORTS = `import PropTypes from 'prop-types';\n`;
-const COMPONENT_NAME_SUFFIX = 'PropTypes';
-const INDENT_CHAR = '\t';
+const INITIAL_STRING = `/* eslint no-use-before-define: 0 */
+import PropTypes from 'prop-types';
+function lazyFunction(fn) {
+  // eslint-disable-next-line func-names
+  return function () {
+    // eslint-disable-next-line prefer-rest-params
+    return fn.apply(this, arguments);
+  };
+}
+`;
+const COMPONENT_NAME_SUFFIX = '';
+const INDENT_CHAR = '  ';
 const QUOTE_CHAR = "'";
 let schemas;
 
@@ -253,7 +261,7 @@ const getPropTypes = (schemaName, schema) => {
  * @param {Object} schema - The schema to generate PropTypes from.
  * @returns {string} - Adds up all the strings from every PropType.
  */
-const schemasReducer = (str, [schemaName, schema]) => {
+const schemasReducer = (acc, [schemaName, schema]) => {
 	const componentName = formatComponentName(schemaName);
 	const isObjectDefinition = schema.type === 'object';
 	const hasProperties = !!schema.properties;
@@ -261,14 +269,20 @@ const schemasReducer = (str, [schemaName, schema]) => {
 
 	if (isObjectDefinition) {
 		if (hasProperties) {
-			return `${str}\nexport const ${componentName} = {\n${propTypes}};\n`;
+			return {
+				...acc,
+				[componentName]: `const ${componentName} = lazyFunction(() => ({\n${propTypes}}));`,
+			};
 		}
 
 		// return empty object if type object has no properties
-		return `${str}\nexport const ${componentName} = {};\n`;
+		return { ...acc, [componentName]: `const ${componentName} = lazyFunction(() => ({}));` };
 	}
 
-	return `${str}\nexport const ${componentName} = ${propTypes};\n`;
+	return {
+		...acc,
+		[componentName]: `const ${componentName} = lazyFunction(() => (${propTypes}));`,
+	};
 };
 
 /**
@@ -278,8 +292,6 @@ const schemasReducer = (str, [schemaName, schema]) => {
  * @returns {String|Error} - The string with the whole `PropTypes` generated or an Error if it is a malformed file.
  */
 const generatePropTypes = (api, schemaToParse) => {
-	const initialString = `${ESLINT_OVERWRITES}${FILE_IMPORTS}`;
-
 	let apiVersion;
 	let hasSchemas;
 	if (api && 'openapi' in api && parseFloat(api.openapi, 10) === 3) {
@@ -289,28 +301,34 @@ const generatePropTypes = (api, schemaToParse) => {
 		apiVersion = 'swagger2';
 		hasSchemas = 'definitions' in api;
 	}
+	if (!hasSchemas) return new Error('API error: Missing schemas');
 
-	if (hasSchemas) {
-		switch (apiVersion) {
-			case 'swagger2':
-				schemas =
-					schemaToParse && api.components.definitions[schemaToParse]
-						? api.components.definitions[schemaToParse].properties
-						: api.definitions;
-				break;
-			case 'openapi3':
-			default:
-				schemas =
-					schemaToParse && api.components.schemas[schemaToParse]
-						? api.components.schemas[schemaToParse].properties
-						: api.components.schemas;
-				break;
-		}
+	switch (apiVersion) {
+		case 'swagger2':
+			schemas =
+				schemaToParse && api.components.definitions[schemaToParse]
+					? api.components.definitions[schemaToParse].properties
+					: api.definitions;
+			break;
+		case 'openapi3':
+		default:
+			schemas =
+				schemaToParse && api.components.schemas[schemaToParse]
+					? api.components.schemas[schemaToParse].properties
+					: api.components.schemas;
+			break;
 	}
+	const schemaEntries = Object.entries(schemas).reduce(schemasReducer, {});
 
-	return hasSchemas
-		? Object.entries(schemas).reduce(schemasReducer, initialString)
-		: new Error('API error: Missing schemas');
+	return `${INITIAL_STRING}
+${Object.values(schemaEntries).join('\n\n')}
+export default {
+
+${Object.keys(schemaEntries)
+  .map(componentName => `${INDENT_CHAR}${componentName}: PropTypes.exact(${componentName}()),`)
+  .join('\n')}
+}
+`;
 };
 
 module.exports = generatePropTypes;
